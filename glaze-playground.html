@@ -139,15 +139,15 @@ const C = {
   // drips (gravity streaks)
   dripAmount: 0.45,      // vertical streak contribution to gradient t
   dripFreq: 5.0,         // streak column frequency
-  dripFall: 0.35,        // downward travel speed
+  dripFall: 1,        // downward travel speed
   // relief (glaze breaking over texture)
   reliefAmount: 0.5,     // how much ridges shift the gradient
   reliefScale: 3.2,      // ridge frequency
   reliefShine: 0.35,     // pale highlight on ridge tops (glaze thinning)
   // grain (color-shift speckle baked into gradient)
-  grainAmount: 0.09,
-  grainScale: 0.9,       // multiplier on fine grain frequency
-  grainLive: 1,          // 1 = shimmer, 0 = frozen
+  grainAmount: 0.18,
+  grainScale: 0.7,       // multiplier on fine grain frequency
+  grainLive: 0,          // 1 = shimmer, 0 = frozen
   // crystals (2D overlay)
   crystalCount: 26,
   crystalMin: 8,         // px radius at 1x
