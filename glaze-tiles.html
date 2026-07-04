@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Glaze Test Tiles</title>
+<!--
+  GLAZE TEST TILES — one glaze recipe, fired sixteen ways.
+  Every tile runs the SAME layered generator (mottled molten base → crystal
+  blooms → mineral speckle); a seeded recipe varies palette, bloom density,
+  speckle pooling, contrast, dark-firing, and pooling wells per tile — like a
+  single studio glaze tested across a board.
+
+  Learnings carried from glaze-playground.html + creative coding library:
+    · mulberry32 seeded RNG — same seed, same tile (Art Blocks pattern)
+    · noise perturbs the gradient POSITION, not RGB (jagopang note) — flecks
+      and grain pull toward neighbouring glaze colors, never gray
+    · Wyvill metaball blooms — compact kernel, merged contours, drift as a
+      pure function of time + hashed personality (animated metaballs note)
+    · coarse-grid fields upscaled bilinear; band edges AA'd in distance space
+    · base motion: three static noise fields crossfaded with 120°-phased
+      weights (Σ = 1) — continuous morph at ~5 ops/cell, no per-frame noise
+  Interaction: click tile = re-fire it · R = re-fire board · S = save PNG
+-->
+<style>
+  :root {
+    --bg: #17140f;
+    --grout: #26221a;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 100%; height: 100%; background: var(--bg); overflow: hidden; }
+  #board {
+    position: fixed; inset: 0;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    grid-template-rows: repeat(4, 1fr);
+    gap: 14px;
+    padding: 34px 34px 46px;
+  }
+  .tile {
+    position: relative; overflow: hidden;
+    border-radius: 7px;
+    background: var(--grout);
+    box-shadow: 0 3px 10px rgba(0,0,0,0.55), inset 0 0 0 1px rgba(255,255,255,0.05);
+    cursor: pointer;
+  }
+  .tile canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  /* glassy fired-surface sheen */
+  .tile::after {
+    content: ''; position: absolute; inset: 0; pointer-events: none;
+    background:
+      linear-gradient(118deg, rgba(255,255,255,0.13) 0%, rgba(255,255,255,0.045) 24%, rgba(255,255,255,0) 42%),
+      radial-gradient(140% 90% at 88% 100%, rgba(0,0,0,0.14), rgba(0,0,0,0) 55%);
+    border-radius: 7px;
+  }
+  .tile .tag {
+    position: absolute; left: 0; right: 0; bottom: 0; z-index: 2;
+    display: flex; justify-content: space-between; align-items: baseline;
+    padding: 14px 9px 6px;
+    font: 10px/1 ui-monospace, "SF Mono", Menlo, monospace;
+    color: rgba(255,255,255,0.92); text-shadow: 0 1px 3px rgba(0,0,0,0.7);
+    background: linear-gradient(rgba(0,0,0,0), rgba(0,0,0,0.38));
+    opacity: 0; transition: opacity 0.18s;
+  }
+  .tile:hover .tag { opacity: 1; }
+  .tile .tag .seed { color: rgba(255,255,255,0.6); }
+  #hud {
+    position: fixed; left: 34px; bottom: 14px; z-index: 3;
+    font: 11px/1.5 ui-monospace, Menlo, monospace;
+    color: rgba(216,210,196,0.55); user-select: none; pointer-events: none;
+  }
+  #hud b { color: rgba(216,210,196,0.9); font-weight: 600; }
+</style>
+</head>
+<body>
+<div id="board"></div>
+<div id="hud"><b>glaze test tiles</b> · one recipe, sixteen firings · click tile = re-fire · <b>R</b> re-fire all · <b>S</b> save board</div>
+
+<script>
+'use strict';
+/* ========================= shared helpers ========================= */
+function mulberry32(a) {
+  return function() {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+function makeNoise2(rng) {
+  const p = [...Array(256).keys()];
+  for (let i = 255; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); [p[i], p[j]] = [p[j], p[i]]; }
+  const perm = new Uint8Array(512);
+  for (let i = 0; i < 512; i++) perm[i] = p[i & 255];
+  const fade = t => t * t * (3 - 2 * t);
+  return function(x, y) {
+    const xi = Math.floor(x), yi = Math.floor(y), xf = x - xi, yf = y - yi;
+    const h = (X, Y) => perm[(perm[X & 255] + Y) & 255] / 255;
+    const u = fade(xf), v = fade(yf);
+    const a = h(xi, yi), b = h(xi + 1, yi), c = h(xi, yi + 1), d = h(xi + 1, yi + 1);
+    return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+  };
+}
+const TAU = Math.PI * 2;
+const c255 = h => { const n = parseInt(h.slice(1), 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; };
+const css = (h, a) => { const n = parseInt(h.slice(1), 16); return `rgba(${n >> 16 & 255},${n >> 8 & 255},${n & 255},${a})`; };
+const mixc = (c1, c2, t) => [c1[0] + (c2[0] - c1[0]) * t, c1[1] + (c2[1] - c1[1]) * t, c1[2] + (c2[2] - c1[2]) * t];
+const ss = (e0, e1, x) => { const t = Math.min(1, Math.max(0, (x - e0) / (e1 - e0))); return t * t * (3 - 2 * t); };
+
+/* palettes pulled from the reference board: cobalts, powder blues, ink,
+   lavender, teal, sand — all with cream crystals + gold/rust mineral flecks */
+const PALETTES = [
+  { deep: '#16255c', base: '#2b4b9e', light: '#a9c4e4', pale: '#f0ede2', accent: '#c9a86a' },
+  { deep: '#0d1220', base: '#22304d', light: '#8fb3d9', pale: '#dfe8f2', accent: '#b8925a' },
+  { deep: '#38618a', base: '#6f9fc0', light: '#cfe0ec', pale: '#f4f0e4', accent: '#b06a3a' },
+  { deep: '#57487e', base: '#8a7fb8', light: '#d8cfe8', pale: '#f2eee6', accent: '#d9a066' },
+  { deep: '#123638', base: '#2e6b6b', light: '#a8d0c8', pale: '#e8f0e4', accent: '#c9a13b' },
+  { deep: '#8a7a55', base: '#b8a67f', light: '#e0d8bf', pale: '#f6f1e2', accent: '#5f88c0' },
+  { deep: '#1f4e66', base: '#3f7f9e', light: '#a2cfd8', pale: '#eef4f4', accent: '#e8c87f' },
+  { deep: '#31425f', base: '#5f7fa8', light: '#c2d3e6', pale: '#f0f2ea', accent: '#b06a3a' },
+];
+
+/* ==================== the recipe: one glaze, many firings ====================
+   makeGlazeTile(w, h, rng) → draw(ctx, t)
+   Layers: (1) molten mottled base — three precomputed noise fields crossfaded
+   with 120°-phased weights, mapped through a 256-entry palette LUT; grain and
+   pooling wells baked into the field (they perturb gradient position);
+   (2) crystal blooms — drifting Wyvill metaballs with pale rim bands, needles,
+   gold nuclei; (3) mineral speckle — noise-pooled flecks, mostly prerendered,
+   a live handful twinkling. */
+function makeGlazeTile(w, h, rng) {
+  const pal = PALETTES[Math.floor(rng() * PALETTES.length)];
+
+  // ---- seeded recipe: where this firing sits inside the family ----
+  const R = {
+    mottleScale: 0.008 + rng() * 0.02,
+    morphSpeed: 0.12 + rng() * 0.22,
+    contrast: 0.85 + rng() * 0.5,
+    bias: -0.05 + rng() * 0.18,
+    darkFired: rng() < 0.2,                        // the ink tiles on the board
+    grain: 0.05 + rng() * 0.09,
+    pool: rng() < 0.35 ? {                          // dark pooling well
+      x: (0.25 + rng() * 0.5) * w, y: (0.25 + rng() * 0.5) * h,
+      r: (0.28 + rng() * 0.3) * Math.min(w, h), s: 0.3 + rng() * 0.35,
+    } : null,
+    bloomCount: rng() < 0.16 ? Math.floor(rng() * 3) : 3 + Math.floor(rng() * 11),
+    bloomMin: 0.045 + rng() * 0.05,                 // fraction of tile width
+    bloomMax: 0.1 + rng() * 0.15,
+    bloomCluster: 0.35 + rng() * 0.45,
+    rimWidth: 0.1 + rng() * 0.18,
+    drift: 0.12 + rng() * 0.3,
+    speckCount: 60 + Math.floor(rng() * 320),
+    speckSharp: 1.5 + rng() * 4.5,
+    accentProb: 0.08 + rng() * 0.3,
+  };
+
+  const step = 2;
+  const W = Math.ceil(w / step), H = Math.ceil(h / step);
+  const N = W * H;
+
+  // ---- palette LUT (256 entries across 4 stops) ----
+  const stops = R.darkFired
+    ? [c255('#0a0d14'), c255(pal.deep), c255(pal.base), c255(pal.light)]
+    : [c255(pal.deep), c255(pal.base), c255(pal.light), c255(pal.pale)];
+  const LUT = new Uint8ClampedArray(256 * 3);
+  for (let i = 0; i < 256; i++) {
+    const v = (i / 255) * 3, k = Math.min(2, v | 0);
+    const c = mixc(stops[k], stops[k + 1], v - k);
+    LUT[i * 3] = c[0]; LUT[i * 3 + 1] = c[1]; LUT[i * 3 + 2] = c[2];
+  }
+
+  // ---- static noise fields A/B/C + baked grain & pooling offset ----
+  // (grain/pool shift the gradient POSITION — the jagopang color-shift trick)
+  const fields = [];
+  for (let k = 0; k < 3; k++) {
+    const nz1 = makeNoise2(rng), nz2 = makeNoise2(rng);
+    const F = new Float32Array(N);
+    const s = R.mottleScale;
+    for (let gy = 0; gy < H; gy++) for (let gx = 0; gx < W; gx++) {
+      const x = gx * step, y = gy * step;
+      F[gy * W + gx] = 0.65 * nz1(x * s, y * s) + 0.35 * nz2(x * s * 2.4 + 9, y * s * 2.4 + 5);
+    }
+    fields.push(F);
+  }
+  const offs = new Float32Array(N); // grain + pooling, static
+  for (let gy = 0; gy < H; gy++) for (let gx = 0; gx < W; gx++) {
+    const i = gy * W + gx;
+    let o = (rng() - 0.5) * 2 * R.grain;
+    if (R.pool) {
+      const dx = gx * step - R.pool.x, dy = gy * step - R.pool.y;
+      o -= R.pool.s * (1 - ss(R.pool.r * 0.35, R.pool.r, Math.sqrt(dx * dx + dy * dy)));
+    }
+    offs[i] = o;
+  }
+  const baseCv = document.createElement('canvas'); baseCv.width = W; baseCv.height = H;
+  const baseCtx = baseCv.getContext('2d');
+  const baseImg = baseCtx.createImageData(W, H);
+
+  // ---- crystal blooms: Wyvill metaballs (playground learnings) ----
+  const blooms = [];
+  for (let i = 0; i < R.bloomCount; i++) {
+    let x, y;
+    if (blooms.length && rng() < R.bloomCluster) {
+      const host = blooms[Math.floor(rng() * blooms.length)];
+      const a = rng() * TAU, d = host.r * (1.1 + rng() * 1.6);
+      x = host.x + Math.cos(a) * d; y = host.y + Math.sin(a) * d;
+    } else { x = rng() * w; y = rng() * h; }
+    const r = (R.bloomMin + Math.pow(rng(), 2) * (R.bloomMax - R.bloomMin)) * w;
+    const spokes = [];
+    const sc = Math.floor(5 + r * 0.4);
+    for (let k = 0; k < sc; k++) spokes.push({ a: rng() * TAU, len: 0.4 + rng() * 0.5, w: 0.5 + rng(), al: 0.12 + rng() * 0.3 });
+    blooms.push({
+      x, y, r, spokes,
+      px: rng() * TAU, py: rng() * TAU, fx: 0.35 + rng() * 0.5, fy: 0.35 + rng() * 0.5,
+    });
+  }
+  const fBuf = new Float32Array(N), nBuf = new Float32Array(N);
+  const bloomCv = document.createElement('canvas'); bloomCv.width = W; bloomCv.height = H;
+  const bloomCtx = bloomCv.getContext('2d');
+  const bloomImg = bloomCtx.createImageData(W, H);
+  const kInf = 1 + R.rimWidth + 0.45;
+  const glow = c255(pal.pale), fill = c255(mixcHex(pal.light, pal.pale, 0.4)), rimc = c255(pal.deep);
+  function mixcHex(h1, h2, t) {
+    const a = c255(h1), b = c255(h2), m = mixc(a, b, t);
+    return '#' + m.map(v => Math.round(v).toString(16).padStart(2, '0')).join('');
+  }
+
+  // ---- mineral speckle: noise-pooled, prerendered + live twinkle subset ----
+  const dpr = Math.min(devicePixelRatio || 1, 1.5);
+  const speckCv = document.createElement('canvas');
+  speckCv.width = Math.round(w * dpr); speckCv.height = Math.round(h * dpr);
+  const spx = speckCv.getContext('2d');
+  spx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const live = [];
+  {
+    const nz = makeNoise2(rng);
+    let tries = R.speckCount * 8, placed = 0;
+    while (tries-- > 0 && placed < R.speckCount) {
+      const x = rng() * w, y = rng() * h;
+      const n = nz(x * 0.02, y * 0.02);
+      if (rng() > Math.pow(n, R.speckSharp)) continue;
+      placed++;
+      const acc = rng() < R.accentProb;
+      const col = acc ? pal.accent : (rng() < 0.5 ? pal.deep : pal.light);
+      const r = 0.5 + Math.pow(rng(), 1.7) * 2.2;
+      const al = 0.25 + rng() * 0.5;
+      if (acc && live.length < 26) { live.push({ x, y, r, al, ph: rng() * TAU, col }); continue; }
+      // smudged ink dot: soft radial lobe (playground speckle learning)
+      const g = spx.createRadialGradient(x, y, 0, x, y, r * 1.7);
+      g.addColorStop(0, css(col, al));
+      g.addColorStop(0.6, css(col, al * 0.75));
+      g.addColorStop(1, css(col, 0));
+      spx.fillStyle = g;
+      spx.beginPath(); spx.arc(x, y, r * 1.7, 0, TAU); spx.fill();
+    }
+  }
+
+  // ---- per-frame draw ----
+  return (ctx, t) => {
+    // 1. molten base: crossfade three fields, weights sum to 1 (120° phases)
+    const mt = t * R.morphSpeed;
+    const wa = (1 + Math.sin(mt)) / 3, wb = (1 + Math.sin(mt + 2.094)) / 3, wc = (1 + Math.sin(mt + 4.189)) / 3;
+    const A = fields[0], B = fields[1], Cc = fields[2];
+    const bd = baseImg.data;
+    for (let i = 0; i < N; i++) {
+      let v = (wa * A[i] + wb * B[i] + wc * Cc[i]) * R.contrast + R.bias + offs[i];
+      let idx = (v * 255) | 0;
+      if (idx < 0) idx = 0; else if (idx > 255) idx = 255;
+      const o = i * 4;
+      bd[o] = LUT[idx * 3]; bd[o + 1] = LUT[idx * 3 + 1]; bd[o + 2] = LUT[idx * 3 + 2]; bd[o + 3] = 255;
+    }
+    baseCtx.putImageData(baseImg, 0, 0);
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(baseCv, 0, 0, w, h);
+
+    // 2. prerendered speckle under the blooms
+    ctx.drawImage(speckCv, 0, 0, w, h);
+
+    // 3. blooms: drifting metaballs, merged contours
+    if (blooms.length) {
+      fBuf.fill(0); nBuf.fill(4);
+      const pos = [];
+      for (const b of blooms) {
+        const amp = R.drift * b.r * 0.35;
+        const bx = b.x + Math.sin(t * b.fx + b.px) * amp;
+        const by = b.y + Math.cos(t * b.fy + b.py) * amp;
+        const rg = b.r * (1 + 0.04 * Math.sin(t * b.fy * 0.7 + b.px));
+        pos.push([bx, by, rg, b]);
+        const Rr = rg * kInf, R2 = Rr * Rr;
+        const x0 = Math.max(0, ((bx - Rr) / step) | 0), x1 = Math.min(W - 1, Math.ceil((bx + Rr) / step));
+        const y0 = Math.max(0, ((by - Rr) / step) | 0), y1 = Math.min(H - 1, Math.ceil((by + Rr) / step));
+        for (let gy = y0; gy <= y1; gy++) {
+          const py = gy * step + 1 - by;
+          for (let gx = x0; gx <= x1; gx++) {
+            const px = gx * step + 1 - bx;
+            const d2 = px * px + py * py;
+            const q = 1 - d2 / R2;
+            if (q <= 0) continue;
+            const i = gy * W + gx;
+            fBuf[i] += q * q * q;
+            const nd = Math.sqrt(d2) / rg;
+            if (nd < nBuf[i]) nBuf[i] = nd;
+          }
+        }
+      }
+      const ndRim = 1 + R.rimWidth;
+      const hk = (ndRim + 0.3) / kInf;
+      const Ghalo = Math.pow(Math.max(0, 1 - hk * hk), 3);
+      const dd = bloomImg.data;
+      for (let i = 0; i < N; i++) {
+        const o = i * 4;
+        const G = fBuf[i];
+        if (G <= Ghalo) { dd[o + 3] = 0; continue; }
+        const nd = kInf * Math.sqrt(Math.max(0, 1 - Math.cbrt(Math.min(1, G))));
+        const aa = 0.06;
+        const aHalo = 0.16 * (1 - ss(1, ndRim + 0.3, nd));
+        const aBand = 0.92 * (1 - ss(ndRim - aa, ndRim + aa, nd)) * ss(1 - aa, 1 + aa, nd);
+        const aBody = 1 - ss(1 - aa, 1 + aa, nd);
+        let cr = glow[0], cg = glow[1], cb = glow[2];
+        let a = Math.max(aHalo, aBand * 0.92);
+        if (aBody > 0) {
+          const m = ss(0.1, 0.85, Math.min(1, nBuf[i]));
+          cr = glow[0] + (fill[0] - glow[0]) * m;
+          cg = glow[1] + (fill[1] - glow[1]) * m;
+          cb = glow[2] + (fill[2] - glow[2]) * m;
+          a = aBody * (0.8 - 0.42 * m) + aBand * 0.9;
+        }
+        dd[o] = cr; dd[o + 1] = cg; dd[o + 2] = cb; dd[o + 3] = Math.min(255, a * 255);
+      }
+      bloomCtx.putImageData(bloomImg, 0, 0);
+      ctx.drawImage(bloomCv, 0, 0, w, h);
+
+      // needles + gold nuclei (the reference rosettes have warm centers)
+      for (const [bx, by, rg, b] of pos) {
+        ctx.strokeStyle = css(pal.pale, 1);
+        for (const s of b.spokes) {
+          ctx.globalAlpha = s.al;
+          ctx.lineWidth = s.w;
+          ctx.beginPath();
+          ctx.moveTo(bx + Math.cos(s.a) * rg * 0.08, by + Math.sin(s.a) * rg * 0.08);
+          ctx.lineTo(bx + Math.cos(s.a) * rg * Math.min(s.len, 0.88), by + Math.sin(s.a) * rg * Math.min(s.len, 0.88));
+          ctx.stroke();
+        }
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = css(pal.accent, 0.75);
+        ctx.beginPath(); ctx.arc(bx, by, Math.max(1, rg * 0.05), 0, TAU); ctx.fill();
+      }
+    }
+
+    // 4. live accent flecks twinkling
+    for (const f of live) {
+      ctx.fillStyle = css(f.col, f.al * (0.65 + 0.35 * Math.sin(t * 0.7 + f.ph)));
+      ctx.beginPath(); ctx.arc(f.x, f.y, f.r, 0, TAU); ctx.fill();
+    }
+  };
+}
+
+/* ======================= board assembly ======================= */
+const board = document.getElementById('board');
+const tiles = [];
+
+function fireTile(tile) {
+  const rng = mulberry32(tile.seed);
+  const dpr = Math.min(devicePixelRatio || 1, 1.5);
+  const rect = tile.el.getBoundingClientRect();
+  const w = Math.max(40, Math.round(rect.width)), hh = Math.max(40, Math.round(rect.height));
+  tile.canvas.width = w * dpr; tile.canvas.height = hh * dpr;
+  tile.ctx = tile.canvas.getContext('2d');
+  tile.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  tile.draw = makeGlazeTile(w, hh, rng);
+  tile.el.querySelector('.seed').textContent = '#' + tile.seed;
+}
+
+for (let i = 0; i < 16; i++) {
+  const el = document.createElement('div');
+  el.className = 'tile';
+  const canvas = document.createElement('canvas');
+  el.appendChild(canvas);
+  const tag = document.createElement('div');
+  tag.className = 'tag';
+  tag.innerHTML = `<span>firing ${String(i + 1).padStart(2, '0')}</span><span class="seed"></span>`;
+  el.appendChild(tag);
+  board.appendChild(el);
+  const tile = { el, canvas, seed: 100 + i * 17, ctx: null, draw: null };
+  el.addEventListener('click', () => { tile.seed = Math.floor(Math.random() * 100000); fireTile(tile); });
+  tiles.push(tile);
+}
+
+addEventListener('keydown', e => {
+  if (e.key === 'r' || e.key === 'R') tiles.forEach(t => { t.seed = Math.floor(Math.random() * 100000); fireTile(t); });
+  if (e.key === 's' || e.key === 'S') saveBoard();
+});
+
+function saveBoard() {
+  const out = document.createElement('canvas');
+  const br = board.getBoundingClientRect();
+  const dpr = Math.min(devicePixelRatio || 1, 1.5);
+  out.width = br.width * dpr; out.height = br.height * dpr;
+  const ctx = out.getContext('2d');
+  ctx.fillStyle = '#17140f'; ctx.fillRect(0, 0, out.width, out.height);
+  for (const t of tiles) {
+    const r = t.el.getBoundingClientRect();
+    ctx.drawImage(t.canvas, (r.left - br.left) * dpr, (r.top - br.top) * dpr, r.width * dpr, r.height * dpr);
+  }
+  const a = document.createElement('a');
+  a.download = 'glaze-test-tiles.png';
+  a.href = out.toDataURL('image/png');
+  a.click();
+}
+
+let resizeT = null;
+addEventListener('resize', () => {
+  clearTimeout(resizeT);
+  resizeT = setTimeout(() => tiles.forEach(fireTile), 150);
+});
+
+let start = performance.now(), frameIdx = 0;
+function loop(now) {
+  const t = (now - start) / 1000;
+  frameIdx++;
+  // stagger: each tile redraws at half rate, half the board per frame
+  for (let i = 0; i < tiles.length; i++) {
+    if ((i + frameIdx) % 2 !== 0) continue;
+    const tile = tiles[i];
+    if (tile.draw) tile.draw(tile.ctx, t);
+  }
+  requestAnimationFrame(loop);
+}
+
+tiles.forEach(fireTile);
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

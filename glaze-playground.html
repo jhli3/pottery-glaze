@@ -1,0 +1,1065 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Glaze Playground</title>
+<!--
+  GLAZE PLAYGROUND — generative pottery-glaze simulator
+  Architecture: two stacked full-screen canvases.
+    1. WebGL  — molten base: cosine multi-stop gradient, simplex UV warp (flow),
+                vertical streak advection (drips), ridged-noise relief (glaze
+                breaking over texture), color-shift grain baked into gradient t.
+    2. Canvas2D — mineral events: crystalline blooms + speckle bursts,
+                deterministic from the same seed.
+  Tunable contract: all state lives in C (controls) + PAL (palette) data blocks;
+  panel is generated from SCHEMA; "Copy state" serializes everything authorable;
+  pasted state can be baked back as defaults.
+-->
+<style>
+  :root {
+    --panel-bg: rgba(16, 20, 19, 0.88);
+    --panel-fg: #d8e0dc;
+    --panel-dim: #7d8a84;
+    --panel-line: rgba(255,255,255,0.08);
+    --accent: #8fd0be;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #101413; }
+  canvas.layer { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+  #gl { z-index: 0; }
+  #overlay { z-index: 1; pointer-events: none; }
+
+  #hud {
+    position: fixed; left: 18px; bottom: 14px; z-index: 3;
+    font: 11px/1.5 ui-monospace, "SF Mono", Menlo, monospace;
+    color: rgba(255,255,255,0.55); text-shadow: 0 1px 3px rgba(0,0,0,0.4);
+    pointer-events: none; user-select: none;
+  }
+  #hud b { color: rgba(255,255,255,0.85); font-weight: 600; }
+
+  #panel {
+    position: fixed; top: 12px; right: 12px; z-index: 4;
+    width: 272px; max-height: calc(100vh - 24px); overflow-y: auto;
+    background: var(--panel-bg); color: var(--panel-fg);
+    border: 1px solid var(--panel-line); border-radius: 10px;
+    backdrop-filter: blur(12px);
+    font: 12px/1.4 ui-monospace, "SF Mono", Menlo, monospace;
+    padding: 10px 12px 14px;
+    scrollbar-width: thin;
+  }
+  #panel.hidden { display: none; }
+  #panel h1 { font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); margin: 2px 0 8px; }
+  #panel details { border-top: 1px solid var(--panel-line); padding: 6px 0; }
+  #panel summary { cursor: pointer; color: var(--panel-dim); text-transform: uppercase; font-size: 10px; letter-spacing: 0.1em; user-select: none; display: flex; align-items: center; gap: 8px; }
+  #panel summary::marker { color: var(--panel-dim); }
+  #panel summary .layer-toggle { margin-left: auto; }
+  .row { display: flex; align-items: center; gap: 8px; margin: 7px 0; }
+  .row label { flex: 0 0 96px; color: var(--panel-fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row input[type=range] { flex: 1; accent-color: var(--accent); min-width: 0; }
+  .row .val { flex: 0 0 44px; text-align: right; color: var(--panel-dim); }
+  .row input[type=color] { flex: 0 0 34px; height: 22px; border: none; background: none; padding: 0; cursor: pointer; }
+  .row .grip { flex: 0 0 14px; cursor: grab; color: var(--panel-dim); user-select: none; font-size: 11px; }
+  .row.dragover { outline: 1px dashed var(--accent); outline-offset: 2px; border-radius: 4px; }
+  .row.dragging { opacity: 0.4; }
+  .row select { flex: 1; background: #1c2422; color: var(--panel-fg); border: 1px solid var(--panel-line); border-radius: 4px; padding: 3px 4px; font: inherit; }
+  .btnrow { display: flex; gap: 6px; margin: 8px 0 2px; flex-wrap: wrap; }
+  button {
+    background: #1c2422; color: var(--panel-fg); border: 1px solid var(--panel-line);
+    border-radius: 6px; padding: 5px 9px; font: inherit; cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); color: var(--accent); }
+  button.primary { background: var(--accent); color: #10221d; border-color: transparent; font-weight: 600; }
+  button.primary:hover { filter: brightness(1.08); color: #10221d; }
+  #seedval { color: var(--accent); font-weight: 600; }
+  input[type=checkbox] { accent-color: var(--accent); }
+  #toast {
+    position: fixed; bottom: 16px; right: 16px; z-index: 5;
+    background: var(--panel-bg); color: var(--accent);
+    border: 1px solid var(--panel-line); border-radius: 8px;
+    padding: 8px 12px; font: 12px ui-monospace, Menlo, monospace;
+    opacity: 0; transition: opacity 0.25s; pointer-events: none;
+  }
+  #toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<canvas id="gl" class="layer"></canvas>
+<canvas id="overlay" class="layer"></canvas>
+
+<div id="hud"><b>glaze playground</b> · seed <span id="hudseed"></span> · <b>R</b> reroll · <b>H</b> panel · <b>S</b> save png</div>
+
+<div id="panel">
+  <h1>Glaze Playground</h1>
+  <details open id="sec-seed">
+    <summary>Kiln (seed)</summary>
+    <div class="row"><label>seed</label><span class="val" id="seedval" style="flex:1;text-align:left"></span></div>
+    <div class="btnrow">
+      <button id="prevSeed">◀</button>
+      <button id="nextSeed">▶</button>
+      <button id="reroll" class="primary">Reroll</button>
+      <input id="seedInput" type="number" style="width:74px;background:#1c2422;color:inherit;border:1px solid var(--panel-line);border-radius:6px;padding:4px 6px;font:inherit" placeholder="seed">
+      <button id="goSeed">Go</button>
+    </div>
+  </details>
+  <details open id="sec-palette"><summary>Palette</summary><div id="paletteBody"></div></details>
+  <div id="schemaSections"></div>
+  <details open>
+    <summary>Actions</summary>
+    <div class="btnrow">
+      <button id="copyState" class="primary">Copy state</button>
+      <button id="pasteState">Paste state</button>
+      <button id="savePng">Save PNG</button>
+      <button id="resetAll">Reset</button>
+    </div>
+  </details>
+</div>
+<div id="toast"></div>
+
+<script>
+'use strict';
+/* ============================================================
+   1. STATE AS DATA — everything tunable lives here.
+   ============================================================ */
+
+const DEFAULT_SEED = 1024;
+
+// C: all scalar/flag controls. Panel is generated from SCHEMA below.
+const C = {
+  // layer switches
+  flowOn: true, dripOn: true, reliefOn: true, grainOn: true, crystalsOn: true, speckleOn: true,
+  // flow (molten base movement)
+  flowIntensity: 0.85,   // strength of UV warp
+  flowComplexity: 1.6,   // noise frequency — bigger = smaller blobs
+  flowSmooth: 0.9,       // softness of warp edges
+  flowSpeed: 0.22,       // travel rate through noise space
+  morphSpeed: 0.05,      // shape-evolution rate (independent of travel)
+  bands: 1.0,            // gradient repeats across the field
+  angle: 90,             // gradient direction, degrees
+  // drips (gravity streaks)
+  dripAmount: 0.45,      // vertical streak contribution to gradient t
+  dripFreq: 5.0,         // streak column frequency
+  dripFall: 0.35,        // downward travel speed
+  // relief (glaze breaking over texture)
+  reliefAmount: 0.5,     // how much ridges shift the gradient
+  reliefScale: 3.2,      // ridge frequency
+  reliefShine: 0.35,     // pale highlight on ridge tops (glaze thinning)
+  // grain (color-shift speckle baked into gradient)
+  grainAmount: 0.09,
+  grainScale: 0.9,       // multiplier on fine grain frequency
+  grainLive: 1,          // 1 = shimmer, 0 = frozen
+  // crystals (2D overlay)
+  crystalCount: 26,
+  crystalMin: 8,         // px radius at 1x
+  crystalMax: 74,
+  crystalCluster: 0.55,  // probability a crystal spawns near a previous one
+  crystalNeedles: 0.8,   // spoke density inside blooms
+  crystalGrowth: 1.8,    // grow-in animation seconds (0 = instant)
+  rimWidth: 0.18,        // pale rim band thickness as fraction of bloom radius
+  crystalDrift: 0.25,    // drift amplitude as fraction of bloom size (0 = static)
+  driftSpeed: 0.3,       // how fast blooms wander their loops
+  // speckle (2D overlay) — ink-dot flecks pooling in noise-driven patches
+  speckleCount: 1400,    // target fleck count
+  speckleSize: 1.6,
+  specklePatch: 3.0,     // ~how many dense patches across the screen
+  speckleEbb: 0.65,      // density contrast: 0 = even sprinkle, 1 = strong pooling
+  speckleSmudge: 0.6,    // ink-bleed softness / elongation
+  accentProb: 0.12,      // chance a fleck uses the accent color (rust/orange pops)
+};
+
+// PAL: active palette colors. Flow c0→c3 map across gradient t.
+let PAL = null; // set from PRESETS at init
+
+const PRESETS = {
+  'Celadon Bloom': {
+    flow: ['#dcebe0', '#9fcabb', '#5fa3a0', '#2e6b74'],
+    crystalFill: '#b7d9e8', crystalRim: '#7fa8c9', crystalGlow: '#e8f4ee',
+    speckleMain: '#3d7a80', speckleAccent: '#c07a4e',
+  },
+  'Eggplant + Sea Spray': {
+    flow: ['#e8f0e4', '#a8cec6', '#8a5f8e', '#4b1f47'],
+    crystalFill: '#c3b2d9', crystalRim: '#8a6f9e', crystalGlow: '#eee6f4',
+    speckleMain: '#6d3a68', speckleAccent: '#9fd8c8',
+  },
+  'Moss & Teal': {
+    flow: ['#cde3c2', '#8a9a4a', '#4a5320', '#242e10'],
+    crystalFill: '#79c8c0', crystalRim: '#3f8a84', crystalGlow: '#d8efe4',
+    speckleMain: '#58b8b0', speckleAccent: '#c96f3a',
+  },
+  'SW253 over SW251': { // chartreuse over chocolate clay, periwinkle mottle, pink flecks
+    flow: ['#dcefcc', '#a4d16e', '#8187b3', '#392b23'],
+    crystalFill: '#b9c4e0', crystalRim: '#6d74a3', crystalGlow: '#e8f4dc',
+    speckleMain: '#5a5f8c', speckleAccent: '#d489a0',
+  },
+  'Crystal Egg': {
+    flow: ['#d9dcf2', '#a9b98c', '#8e97e8', '#4a5568'],
+    crystalFill: '#96a0ee', crystalRim: '#5c66c2', crystalGlow: '#e6e8fa',
+    speckleMain: '#7d8a5a', speckleAccent: '#cdd97a',
+  },
+  'Snow, Seaweed & Rainforest': { // milky snow → mossy green → sea teal → indigo pools, navy dot clusters
+    flow: ['#eef0e6', '#7d9a6f', '#4f7f96', '#1c2f52'],
+    crystalFill: '#c2d4dc', crystalRim: '#42627f', crystalGlow: '#f2f5ec',
+    speckleMain: '#1e3a5f', speckleAccent: '#8a8f4a',
+  },
+};
+
+const DEFAULT_PRESET = 'Celadon Bloom';
+const C_DEFAULTS = JSON.parse(JSON.stringify(C));
+
+// SCHEMA drives panel generation. sec → { toggleKey, rows: [key, label, min, max, step] }
+const SCHEMA = [
+  { sec: 'Flow', toggle: 'flowOn', rows: [
+    ['flowIntensity', 'intensity', 0, 1, 0.01],
+    ['flowComplexity', 'complexity', 0.3, 6, 0.05],
+    ['flowSmooth', 'smoothness', 0.5, 0.99, 0.01],
+    ['flowSpeed', 'travel', 0, 1, 0.01],
+    ['morphSpeed', 'morph', 0, 0.3, 0.005],
+    ['bands', 'bands', 0.5, 4, 0.25],
+    ['angle', 'angle°', 0, 360, 1],
+  ]},
+  { sec: 'Drips', toggle: 'dripOn', rows: [
+    ['dripAmount', 'amount', 0, 1, 0.01],
+    ['dripFreq', 'streaks', 1, 16, 0.5],
+    ['dripFall', 'fall speed', 0, 1.5, 0.01],
+  ]},
+  { sec: 'Relief', toggle: 'reliefOn', rows: [
+    ['reliefAmount', 'break amount', 0, 1.2, 0.01],
+    ['reliefScale', 'ridge scale', 0.5, 12, 0.1],
+    ['reliefShine', 'thin shine', 0, 1, 0.01],
+  ]},
+  { sec: 'Grain', toggle: 'grainOn', rows: [
+    ['grainAmount', 'amount', 0, 0.3, 0.005],
+    ['grainScale', 'fineness', 0.2, 3, 0.05],
+    ['grainLive', 'shimmer', 0, 1, 1],
+  ]},
+  { sec: 'Crystals', toggle: 'crystalsOn', rows: [
+    ['crystalCount', 'count', 0, 120, 1],
+    ['crystalMin', 'min radius', 2, 40, 1],
+    ['crystalMax', 'max radius', 10, 200, 1],
+    ['crystalCluster', 'clustering', 0, 1, 0.01],
+    ['crystalNeedles', 'needles', 0, 1, 0.01],
+    ['crystalGrowth', 'grow-in (s)', 0, 5, 0.1],
+    ['rimWidth', 'rim width', 0.06, 0.45, 0.01],
+    ['crystalDrift', 'drift', 0, 1, 0.01],
+    ['driftSpeed', 'drift speed', 0, 1, 0.01],
+  ]},
+  { sec: 'Speckle', toggle: 'speckleOn', rows: [
+    ['speckleCount', 'count', 0, 4000, 10],
+    ['speckleSize', 'fleck size', 0.5, 5, 0.1],
+    ['specklePatch', 'patch count', 0.5, 10, 0.1],
+    ['speckleEbb', 'ebb & flow', 0, 1, 0.01],
+    ['speckleSmudge', 'smudge', 0, 1, 0.01],
+    ['accentProb', 'accent %', 0, 0.6, 0.01],
+  ]},
+];
+
+// keys whose change requires re-generating the 2D overlay (vs live shader uniforms)
+const OVERLAY_KEYS = new Set(['crystalCount','crystalMin','crystalMax','crystalCluster',
+  'crystalNeedles','crystalGrowth','rimWidth','speckleCount','speckleSize','specklePatch',
+  'speckleEbb','speckleSmudge','accentProb','crystalsOn','speckleOn']);
+
+let seed = DEFAULT_SEED;
+
+/* ============================================================
+   2. Deterministic RNG (mulberry32) — same seed, same pot.
+   ============================================================ */
+function mulberry32(a) {
+  return function() {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+function hexToRgb(h) {
+  const n = parseInt(h.slice(1), 16);
+  return [(n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255];
+}
+function hexToCss(h, a) {
+  const n = parseInt(h.slice(1), 16);
+  return `rgba(${n >> 16 & 255},${n >> 8 & 255},${n & 255},${a})`;
+}
+function hexTo255(h) {
+  const n = parseInt(h.slice(1), 16);
+  return [n >> 16 & 255, n >> 8 & 255, n & 255];
+}
+
+// seeded 2D value noise (2-octave use) — drives speckle density ebb & flow
+function makeNoise2(rng) {
+  const p = [...Array(256).keys()];
+  for (let i = 255; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [p[i], p[j]] = [p[j], p[i]];
+  }
+  const perm = new Uint8Array(512);
+  for (let i = 0; i < 512; i++) perm[i] = p[i & 255];
+  const fade = t => t * t * (3 - 2 * t);
+  return function(x, y) {
+    const xi = Math.floor(x), yi = Math.floor(y);
+    const xf = x - xi, yf = y - yi;
+    const h = (X, Y) => perm[(perm[X & 255] + Y) & 255] / 255;
+    const u = fade(xf), v = fade(yf);
+    const a = h(xi, yi), b = h(xi + 1, yi), c = h(xi, yi + 1), d = h(xi + 1, yi + 1);
+    return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+  };
+}
+
+function lighten(h, f) {
+  const n = parseInt(h.slice(1), 16);
+  const r = Math.min(255, Math.round((n >> 16 & 255) + (255 - (n >> 16 & 255)) * f));
+  const g = Math.min(255, Math.round((n >> 8 & 255) + (255 - (n >> 8 & 255)) * f));
+  const b = Math.min(255, Math.round((n & 255) + (255 - (n & 255)) * f));
+  return `rgb(${r},${g},${b})`;
+}
+
+/* ============================================================
+   3. WEBGL BASE LAYER — the molten glaze field.
+   ============================================================ */
+const glCanvas = document.getElementById('gl');
+const gl = glCanvas.getContext('webgl', { preserveDrawingBuffer: true });
+
+const VERT = `
+attribute vec3 aPosition;
+varying vec2 vUv;
+void main() {
+  gl_Position = vec4(aPosition, 1.0);
+  vUv = gl_Position.xy * 0.5 + 0.5;
+}`;
+
+const FRAG = `
+precision highp float;
+varying vec2 vUv;
+uniform vec2 uRes;
+uniform float uTime, uMorphTime, uGrainTime, uSeed;
+uniform vec3 uC0, uC1, uC2, uC3;
+uniform vec2 uAngle;
+uniform float uFlowOn, uDripOn, uReliefOn, uGrainOn;
+uniform float uFlowIntensity, uFlowComplexity, uFlowSmooth, uBands;
+uniform float uDripAmount, uDripFreq, uDripFall;
+uniform float uReliefAmount, uReliefScale, uReliefShine;
+uniform float uGrainAmount, uGrainScale;
+
+#define PI 3.141592653589793
+
+// --- Ashima 3D simplex noise (MIT, github.com/ashima/webgl-noise) ---
+vec3 mod289(vec3 x){ return x - floor(x * (1.0/289.0)) * 289.0; }
+vec4 mod289(vec4 x){ return x - floor(x * (1.0/289.0)) * 289.0; }
+vec4 permute(vec4 x){ return mod289(((x*34.0)+1.0)*x); }
+vec4 taylorInvSqrt(vec4 r){ return 1.79284291400159 - 0.85373472095314 * r; }
+float snoise(vec3 v){
+  const vec2 Cc = vec2(1.0/6.0, 1.0/3.0);
+  const vec4 D = vec4(0.0, 0.5, 1.0, 2.0);
+  vec3 i = floor(v + dot(v, Cc.yyy));
+  vec3 x0 = v - i + dot(i, Cc.xxx);
+  vec3 g = step(x0.yzx, x0.xyz);
+  vec3 l = 1.0 - g;
+  vec3 i1 = min(g.xyz, l.zxy);
+  vec3 i2 = max(g.xyz, l.zxy);
+  vec3 x1 = x0 - i1 + Cc.xxx;
+  vec3 x2 = x0 - i2 + Cc.yyy;
+  vec3 x3 = x0 - D.yyy;
+  i = mod289(i);
+  vec4 p = permute(permute(permute(
+      i.z + vec4(0.0, i1.z, i2.z, 1.0))
+    + i.y + vec4(0.0, i1.y, i2.y, 1.0))
+    + i.x + vec4(0.0, i1.x, i2.x, 1.0));
+  float n_ = 0.142857142857;
+  vec3 ns = n_ * D.wyz - D.xzx;
+  vec4 j = p - 49.0 * floor(p * ns.z * ns.z);
+  vec4 x_ = floor(j * ns.z);
+  vec4 y_ = floor(j - 7.0 * x_);
+  vec4 x = x_ * ns.x + ns.yyyy;
+  vec4 y = y_ * ns.x + ns.yyyy;
+  vec4 h = 1.0 - abs(x) - abs(y);
+  vec4 b0 = vec4(x.xy, y.xy);
+  vec4 b1 = vec4(x.zw, y.zw);
+  vec4 s0 = floor(b0) * 2.0 + 1.0;
+  vec4 s1 = floor(b1) * 2.0 + 1.0;
+  vec4 sh = -step(h, vec4(0.0));
+  vec4 a0 = b0.xzyw + s0.xzyw * sh.xxyy;
+  vec4 a1 = b1.xzyw + s1.xzyw * sh.zzww;
+  vec3 p0 = vec3(a0.xy, h.x);
+  vec3 p1 = vec3(a0.zw, h.y);
+  vec3 p2 = vec3(a1.xy, h.z);
+  vec3 p3 = vec3(a1.zw, h.w);
+  vec4 norm = taylorInvSqrt(vec4(dot(p0,p0), dot(p1,p1), dot(p2,p2), dot(p3,p3)));
+  p0 *= norm.x; p1 *= norm.y; p2 *= norm.z; p3 *= norm.w;
+  vec4 m = max(0.6 - vec4(dot(x0,x0), dot(x1,x1), dot(x2,x2), dot(x3,x3)), 0.0);
+  m = m * m;
+  return 42.0 * dot(m*m, vec4(dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3)));
+}
+// --------------------------------------------------------------
+
+float rand2(vec2 co){ return fract(sin(dot(co, vec2(12.9898, 78.233))) * 43758.5453); }
+float easeOut(float t){ float f = t - 1.0; return f*f*f + 1.0; }
+
+vec3 grad4(float t){
+  t = clamp(t, 0.0, 1.0) * 3.0;
+  vec3 c = mix(uC0, uC1, clamp(t, 0.0, 1.0));
+  c = mix(c, uC2, clamp(t - 1.0, 0.0, 1.0));
+  c = mix(c, uC3, clamp(t - 2.0, 0.0, 1.0));
+  return c;
+}
+
+void main(){
+  vec2 uv = vUv;
+  vec2 p = uv * vec2(uRes.x / uRes.y, 1.0);
+
+  // FLOW: warp UV through travelling 3D simplex noise (travel + morph tick
+  // independently so the motion never locks into a loop).
+  if (uFlowOn > 0.5) {
+    float n = 0.5 + 0.5 * snoise(vec3(p * uFlowComplexity + vec2(uTime, uTime * 0.37), uMorphTime) + uSeed);
+    float w = easeOut(smoothstep(1.0 - uFlowSmooth, 1.0, n)) * uFlowIntensity;
+    uv = (uv - 0.5) * (1.0 - w) + 0.5;
+  }
+
+  // gradient position: cosine-smoothed, multi-band
+  float t = dot(vec2(0.5) - uv, uAngle) + 0.5;
+  t = (cos(t * uBands * PI) + 1.0) * 0.5;
+
+  // DRIPS: vertically-stretched streak noise falling downward
+  if (uDripOn > 0.5) {
+    float streak = snoise(vec3(p.x * uDripFreq, p.y * 0.8 - uTime * uDripFall * 2.0, uSeed + 31.0));
+    float col = snoise(vec3(p.x * uDripFreq * 2.3, 7.7, uSeed + 63.0)); // per-column weight
+    t += uDripAmount * streak * (0.5 + 0.5 * col) * 0.45;
+  }
+
+  // RELIEF: ridged noise = carved texture under the glaze.
+  float ridge = 0.0;
+  if (uReliefOn > 0.5) {
+    float rn = snoise(vec3(p * uReliefScale, uSeed * 0.7 + 11.0));
+    ridge = pow(1.0 - abs(rn), 3.0);
+    t += (ridge - 0.4) * uReliefAmount * 0.5;
+  }
+
+  // GRAIN: color-shift speckle — perturbs t, not RGB, so flecks pull toward
+  // neighbouring glaze colors instead of reading as gray noise.
+  if (uGrainOn > 0.5) {
+    float g = snoise(vec3(gl_FragCoord.xy * 0.008 * (uGrainScale * 100.0), uGrainTime)
+                     + rand2(gl_FragCoord.xy * 0.01 + uGrainTime));
+    t += uGrainAmount * g;
+  }
+
+  vec3 color = grad4(t);
+
+  // thin-glaze highlight where relief peaks (glaze breaks pale on ridges)
+  if (uReliefOn > 0.5) {
+    color = mix(color, vec3(0.93, 0.95, 0.91), ridge * uReliefShine * 0.55);
+  }
+
+  gl_FragColor = vec4(color, 1.0);
+}`;
+
+function makeShader(type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+    throw new Error('shader: ' + gl.getShaderInfoLog(s));
+  }
+  return s;
+}
+const prog = gl.createProgram();
+gl.attachShader(prog, makeShader(gl.VERTEX_SHADER, VERT));
+gl.attachShader(prog, makeShader(gl.FRAGMENT_SHADER, FRAG));
+gl.linkProgram(prog);
+if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error('link: ' + gl.getProgramInfoLog(prog));
+gl.useProgram(prog);
+
+// full-screen triangle
+const buf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1,0, 3,-1,0, -1,3,0]), gl.STATIC_DRAW);
+const aPos = gl.getAttribLocation(prog, 'aPosition');
+gl.enableVertexAttribArray(aPos);
+gl.vertexAttribPointer(aPos, 3, gl.FLOAT, false, 0, 0);
+
+const U = {};
+['uRes','uTime','uMorphTime','uGrainTime','uSeed','uC0','uC1','uC2','uC3','uAngle',
+ 'uFlowOn','uDripOn','uReliefOn','uGrainOn',
+ 'uFlowIntensity','uFlowComplexity','uFlowSmooth','uBands',
+ 'uDripAmount','uDripFreq','uDripFall',
+ 'uReliefAmount','uReliefScale','uReliefShine',
+ 'uGrainAmount','uGrainScale'].forEach(n => U[n] = gl.getUniformLocation(prog, n));
+
+/* ============================================================
+   4. 2D OVERLAY — crystalline blooms + speckle bursts.
+   Deterministic: regenerated from (seed, C, PAL) whenever those change.
+   ============================================================ */
+const ovCanvas = document.getElementById('overlay');
+const ov = ovCanvas.getContext('2d');
+let crystals = [];   // {x, y, r, delay, spokes:[{a, len, w, al}]}
+let speckles = [];   // {x, y, lobes:[{dx,dy,r}], rot, squash, accent, al, bleed}
+let overlayBornAt = 0;
+let overlayAnimating = false;
+
+// offscreen buffers: coarse metaball field (upscaled smooth) + prerendered speckle
+const fieldCv = document.createElement('canvas');
+const fieldCtx = fieldCv.getContext('2d');
+let fieldImg = null, fieldBuf = null, nearBuf = null, rgBuf = null;
+const FIELD_STEP = 2; // CSS px per field cell
+const speckleCv = document.createElement('canvas');
+const speckleCtx = speckleCv.getContext('2d');
+
+function genOverlay() {
+  const w = innerWidth, h = innerHeight;
+  const rng = mulberry32(seed * 7 + 13);
+  crystals = [];
+  speckles = [];
+
+  if (C.crystalsOn) {
+    for (let i = 0; i < C.crystalCount; i++) {
+      let x, y;
+      if (crystals.length && rng() < C.crystalCluster) {
+        const host = crystals[Math.floor(rng() * crystals.length)];
+        const ang = rng() * Math.PI * 2;
+        const d = host.r * (1.1 + rng() * 1.8);
+        x = host.x + Math.cos(ang) * d;
+        y = host.y + Math.sin(ang) * d;
+      } else {
+        x = rng() * w; y = rng() * h;
+      }
+      const r = C.crystalMin + Math.pow(rng(), 2.2) * (C.crystalMax - C.crystalMin);
+      const spokeCount = Math.floor((6 + r * 0.45) * C.crystalNeedles);
+      const spokes = [];
+      for (let s = 0; s < spokeCount; s++) {
+        spokes.push({
+          a: rng() * Math.PI * 2,
+          len: 0.45 + rng() * 0.5,
+          w: 0.6 + rng() * 1.2,
+          al: 0.1 + rng() * 0.3,
+        });
+      }
+      crystals.push({
+        x, y, r, delay: rng() * 0.55, spokes,
+        // drift personality (stateless motion: position is a pure function of
+        // time + these constants — nothing accumulates, stays seed-reproducible)
+        drift: {
+          px: rng() * Math.PI * 2, py: rng() * Math.PI * 2,
+          fx: 0.5 + rng() * 0.8, fy: 0.5 + rng() * 0.8,
+          ax: 0.6 + rng() * 0.4, ay: 0.6 + rng() * 0.4,
+        },
+      });
+    }
+  }
+
+  if (C.speckleOn) {
+    // rejection-sample against a noise density field: flecks pool in patches
+    // that ebb and flow instead of sprinkling uniformly
+    const nz = makeNoise2(mulberry32(seed * 31 + 7));
+    const freq = C.specklePatch / Math.min(w, h);
+    const sharp = 1 + C.speckleEbb * 6;
+    let attempts = C.speckleCount * 8, placed = 0;
+    while (attempts-- > 0 && placed < C.speckleCount) {
+      const x = rng() * w, y = rng() * h;
+      const n = 0.65 * nz(x * freq, y * freq)
+              + 0.35 * nz(x * freq * 2.7 + 13.7, y * freq * 2.7 + 41.3);
+      if (rng() > Math.pow(n, sharp)) continue;
+      placed++;
+      const base = (0.5 + Math.pow(rng(), 1.8) * 1.6) * C.speckleSize;
+      const lobes = [];
+      const nLob = 1 + Math.floor(rng() * 3); // irregular multi-lobed ink dots
+      for (let l = 0; l < nLob; l++) {
+        lobes.push({
+          dx: (rng() - 0.5) * base * 1.6,
+          dy: (rng() - 0.5) * base * 1.6,
+          r: base * (0.55 + rng() * 0.6),
+        });
+      }
+      speckles.push({
+        x, y, lobes,
+        rot: rng() * Math.PI,
+        squash: 0.55 + rng() * 0.45,
+        accent: rng() < C.accentProb,
+        al: 0.28 + rng() * 0.55,
+        bleed: rng() < C.speckleSmudge * 0.7,
+      });
+    }
+    renderSpeckleLayer();
+  }
+
+  overlayBornAt = performance.now();
+  overlayAnimating = C.crystalGrowth > 0.01;
+  drawOverlay(overlayAnimating ? 0 : 1);
+}
+
+// prerendered once per generation — soft radial lobes read as smudged ink
+function renderSpeckleLayer() {
+  const dpr = Math.min(devicePixelRatio || 1, 1.5);
+  speckleCv.width = Math.round(innerWidth * dpr);
+  speckleCv.height = Math.round(innerHeight * dpr);
+  const sx = speckleCtx;
+  sx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  sx.clearRect(0, 0, innerWidth, innerHeight);
+  const soft = 0.25 + C.speckleSmudge * 1.3;
+  for (const f of speckles) {
+    const col = f.accent ? PAL.speckleAccent : PAL.speckleMain;
+    sx.save();
+    sx.translate(f.x, f.y);
+    sx.rotate(f.rot);
+    sx.scale(1, f.squash);
+    if (f.bleed) { // faint ink-bleed halo under the dot
+      const R = f.lobes[0].r * (2.2 + soft);
+      const g = sx.createRadialGradient(0, 0, 0, 0, 0, R);
+      g.addColorStop(0, hexToCss(col, f.al * 0.14));
+      g.addColorStop(1, hexToCss(col, 0));
+      sx.fillStyle = g;
+      sx.beginPath(); sx.arc(0, 0, R, 0, Math.PI * 2); sx.fill();
+    }
+    for (const l of f.lobes) {
+      const R = l.r * (1 + soft);
+      const g = sx.createRadialGradient(l.dx, l.dy, 0, l.dx, l.dy, R);
+      g.addColorStop(0, hexToCss(col, f.al));
+      g.addColorStop(Math.max(0.05, 0.75 - soft * 0.45), hexToCss(col, f.al * 0.8));
+      g.addColorStop(1, hexToCss(col, 0));
+      sx.fillStyle = g;
+      sx.beginPath(); sx.arc(l.dx, l.dy, R, 0, Math.PI * 2); sx.fill();
+    }
+    sx.restore();
+  }
+}
+
+function drawOverlay(globalGrowth) {
+  const dpr = Math.min(devicePixelRatio || 1, 1.5);
+  const w = innerWidth, h = innerHeight;
+  ov.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ov.clearRect(0, 0, w, h);
+
+  if (C.speckleOn) {
+    ov.globalAlpha = Math.min(1, globalGrowth * 2);
+    ov.drawImage(speckleCv, 0, 0, w, h);
+    ov.globalAlpha = 1;
+  }
+
+  if (!C.crystalsOn || !crystals.length) return;
+
+  /* METABALL FIELD — touching blooms merge like bubbles.
+     Wyvill kernel: f(d) = (1 - (d/R)²)³, compactly supported — reaches exactly
+     0 at the influence edge R with zero slope, so per-bloom bounding boxes
+     introduce no discontinuities anywhere (Σ r²/d² never hits zero and left
+     rectangular seams). Overlapping blooms share one contour; rims/halos are
+     bands of pseudo-distance recovered by inverting the kernel. Nuclei +
+     needles stay per-crystal, keeping merged blooms individually legible. */
+  const step = FIELD_STEP;
+  const W = Math.ceil(w / step), H = Math.ceil(h / step);
+  if (fieldCv.width !== W || fieldCv.height !== H) {
+    fieldCv.width = W; fieldCv.height = H;
+    fieldImg = fieldCtx.createImageData(W, H);
+    fieldBuf = new Float32Array(W * H);
+    nearBuf = new Float32Array(W * H);
+    rgBuf = new Float32Array(W * H);
+  }
+  fieldBuf.fill(0);
+  nearBuf.fill(4);
+  rgBuf.fill(0);
+
+  // kernel support: just past the halo's outer edge (halo alpha hits 0 first)
+  const kInf = 1 + C.rimWidth + 0.6;
+  const grown = [];
+  for (const c of crystals) {
+    let g = 1;
+    if (globalGrowth < 1) {
+      g = Math.min(1, Math.max(0, (globalGrowth - c.delay) / (1 - c.delay + 1e-6)));
+      g = 1 - Math.pow(1 - g, 3); // cubic ease-out
+    }
+    if (g <= 0.02) continue;
+    // stateless drift: sine/cosine loops from time + per-bloom personality
+    const d = c.drift;
+    const dAmp = C.crystalDrift * c.r * 0.12;
+    const cx = c.x + Math.sin(ovTime * d.fx + d.px) * d.ax * dAmp;
+    const cy = c.y + Math.cos(ovTime * d.fy + d.py) * d.ay * dAmp;
+    const rg = c.r * g * (1 + C.crystalDrift * 0.04 * Math.sin(ovTime * d.fy * 0.7 + d.px)); // gentle breathing
+    grown.push({ c, cx, cy, rg, g });
+    const R = rg * kInf;
+    const R2 = R * R;
+    const x0 = Math.max(0, Math.floor((cx - R) / step)), x1 = Math.min(W - 1, Math.ceil((cx + R) / step));
+    const y0 = Math.max(0, Math.floor((cy - R) / step)), y1 = Math.min(H - 1, Math.ceil((cy + R) / step));
+    for (let gy = y0; gy <= y1; gy++) {
+      const py = gy * step + step * 0.5 - cy;
+      for (let gx = x0; gx <= x1; gx++) {
+        const px = gx * step + step * 0.5 - cx;
+        const d2 = px * px + py * py;
+        const q = 1 - d2 / R2;
+        if (q <= 0) continue; // kernel is exactly 0 beyond R — nothing to clip
+        const i = gy * W + gx;
+        fieldBuf[i] += q * q * q;
+        const nd = Math.sqrt(d2) / rg; // dominant bloom = smallest normalized dist
+        if (nd < nearBuf[i]) { nearBuf[i] = nd; rgBuf[i] = rg; }
+      }
+    }
+  }
+
+  /* Color the field in DISTANCE space, not field space: nd = 1/√f is the
+     normalized distance to the merged surface (d/r for an isolated bloom).
+     Band edges get an anti-alias width tied to the cell size relative to the
+     dominant bloom (aa ≈ 1.4 cells), so transitions always span multiple grid
+     cells and the bilinear upscale stays smooth — no staircase. */
+  const [glR, glG, glB] = hexTo255(PAL.crystalGlow);
+  const [fiR, fiG, fiB] = hexTo255(PAL.crystalFill);
+  const [riR, riG, riB] = hexTo255(PAL.crystalRim);
+  const rw = C.rimWidth;
+  const ndRim = 1 + rw;         // outer edge of pale band
+  const ndLine = ndRim + 0.07;  // darker outline just outside it
+  const ndHalo = ndRim + 0.55;  // soft glow extent (inside kernel support kInf)
+  // field value at the halo edge — cells below this are fully transparent
+  const hk = ndHalo / kInf;
+  const Ghalo = Math.pow(Math.max(0, 1 - hk * hk), 3);
+  const ss = (e0, e1, x) => {
+    const t = Math.min(1, Math.max(0, (x - e0) / (e1 - e0)));
+    return t * t * (3 - 2 * t);
+  };
+  const inside = (x, edge, aa) => 1 - ss(edge - aa, edge + aa, x); // 1 inside, AA at edge
+  const acc = [0, 0, 0, 0];
+  const put = (cr, cg, cb, ca) => {
+    if (ca <= 0.004) return;
+    const na = ca + acc[3] * (1 - ca);
+    acc[0] = (cr * ca + acc[0] * acc[3] * (1 - ca)) / na;
+    acc[1] = (cg * ca + acc[1] * acc[3] * (1 - ca)) / na;
+    acc[2] = (cb * ca + acc[2] * acc[3] * (1 - ca)) / na;
+    acc[3] = na;
+  };
+  const data = fieldImg.data;
+  for (let i = 0; i < W * H; i++) {
+    const G = fieldBuf[i];
+    const o = i * 4;
+    if (G <= Ghalo) { data[o + 3] = 0; continue; }
+    // invert the kernel: pseudo-distance, exact d/r for an isolated bloom
+    const nd = kInf * Math.sqrt(Math.max(0, 1 - Math.cbrt(Math.min(1, G))));
+    const aa = Math.min(0.45, (step * 1.4) / rgBuf[i]);
+    acc[0] = acc[1] = acc[2] = acc[3] = 0;
+    put(glR, glG, glB, 0.14 * (1 - ss(ndRim, ndHalo, nd)));                 // halo
+    put(riR, riG, riB, 0.5 * inside(nd, ndLine, Math.max(aa, 0.05)));       // dark outline
+    const aBand = inside(nd, ndRim, aa) * (1 - inside(nd, 1, aa));
+    put(glR, glG, glB, 0.92 * aBand);                                       // pale rim band only
+    const aBody = inside(nd, 1, aa);
+    if (aBody > 0.004) {
+      const t = Math.min(1, nearBuf[i]);       // 0 at a bloom's own center
+      const m = ss(0.12, 0.8, t);              // pale nucleus → translucent fill
+      put(glR + (fiR - glR) * m, glG + (fiG - glG) * m, glB + (fiB - glB) * m,
+          aBody * (0.72 - 0.38 * t));
+    }
+    data[o] = acc[0]; data[o + 1] = acc[1]; data[o + 2] = acc[2]; data[o + 3] = acc[3] * 255;
+  }
+  fieldCtx.putImageData(fieldImg, 0, 0);
+  ov.imageSmoothingEnabled = true;
+  ov.drawImage(fieldCv, 0, 0, w, h);
+
+  // per-crystal pass: needles + nucleus keep merged blooms distinct
+  for (const { c, cx, cy, rg, g } of grown) {
+    ov.strokeStyle = hexToCss(PAL.crystalGlow, 1);
+    for (const s of c.spokes) {
+      ov.globalAlpha = s.al * g;
+      ov.lineWidth = s.w;
+      ov.beginPath();
+      ov.moveTo(cx + Math.cos(s.a) * rg * 0.08, cy + Math.sin(s.a) * rg * 0.08);
+      ov.lineTo(cx + Math.cos(s.a) * rg * Math.min(s.len, 0.9), cy + Math.sin(s.a) * rg * Math.min(s.len, 0.9));
+      ov.stroke();
+    }
+    ov.globalAlpha = 1;
+    ov.fillStyle = hexToCss(PAL.crystalRim, 0.8 * g);
+    ov.beginPath(); ov.arc(cx, cy, Math.max(1, rg * 0.035), 0, Math.PI * 2); ov.fill();
+  }
+}
+
+/* ============================================================
+   5. RENDER LOOP + RESIZE
+   ============================================================ */
+let time = 0, morphTime = 0, grainTime = 0, ovTime = 0, lastFrame = performance.now();
+let frameCount = 0;
+
+function resize() {
+  const dpr = Math.min(devicePixelRatio || 1, 1.5);
+  for (const cv of [glCanvas, ovCanvas]) {
+    cv.width = Math.round(innerWidth * dpr);
+    cv.height = Math.round(innerHeight * dpr);
+  }
+  gl.viewport(0, 0, glCanvas.width, glCanvas.height);
+  genOverlay(); // geometry is in CSS pixels; regenerate for new bounds
+}
+addEventListener('resize', resize);
+
+function frame(now) {
+  const dt = Math.min(0.05, (now - lastFrame) / 1000);
+  lastFrame = now;
+  time += dt * C.flowSpeed * 0.5;
+  morphTime += dt * C.morphSpeed;
+  if (C.grainLive > 0.5) grainTime += dt * 0.8;
+  ovTime += dt * C.driftSpeed * 2;
+  frameCount++;
+
+  gl.uniform2f(U.uRes, glCanvas.width, glCanvas.height);
+  gl.uniform1f(U.uTime, time);
+  gl.uniform1f(U.uMorphTime, morphTime);
+  gl.uniform1f(U.uGrainTime, grainTime);
+  gl.uniform1f(U.uSeed, (seed % 1000) * 0.13);
+  const rad = C.angle * Math.PI / 180;
+  gl.uniform2f(U.uAngle, Math.cos(rad), Math.sin(rad));
+  gl.uniform3fv(U.uC0, hexToRgb(PAL.flow[0]));
+  gl.uniform3fv(U.uC1, hexToRgb(PAL.flow[1]));
+  gl.uniform3fv(U.uC2, hexToRgb(PAL.flow[2]));
+  gl.uniform3fv(U.uC3, hexToRgb(PAL.flow[3]));
+  gl.uniform1f(U.uFlowOn, C.flowOn ? 1 : 0);
+  gl.uniform1f(U.uDripOn, C.dripOn ? 1 : 0);
+  gl.uniform1f(U.uReliefOn, C.reliefOn ? 1 : 0);
+  gl.uniform1f(U.uGrainOn, C.grainOn ? 1 : 0);
+  gl.uniform1f(U.uFlowIntensity, C.flowIntensity);
+  gl.uniform1f(U.uFlowComplexity, C.flowComplexity);
+  gl.uniform1f(U.uFlowSmooth, C.flowSmooth);
+  gl.uniform1f(U.uBands, C.bands);
+  gl.uniform1f(U.uDripAmount, C.dripAmount);
+  gl.uniform1f(U.uDripFreq, C.dripFreq);
+  gl.uniform1f(U.uDripFall, C.dripFall);
+  gl.uniform1f(U.uReliefAmount, C.reliefAmount);
+  gl.uniform1f(U.uReliefScale, C.reliefScale);
+  gl.uniform1f(U.uReliefShine, C.reliefShine);
+  gl.uniform1f(U.uGrainAmount, C.grainAmount);
+  gl.uniform1f(U.uGrainScale, C.grainScale);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+  // crystal grow-in animation, then continuous drift (half framerate — the
+  // field recompute is the hot path and 30fps is plenty for slow wander)
+  if (overlayAnimating) {
+    const el = (performance.now() - overlayBornAt) / (C.crystalGrowth * 1000);
+    if (el >= 1) { overlayAnimating = false; drawOverlay(1); }
+    else drawOverlay(el);
+  } else if (C.crystalsOn && C.crystalDrift > 0.001 && C.driftSpeed > 0.001 && (frameCount & 1) === 0) {
+    drawOverlay(1);
+  }
+
+  requestAnimationFrame(frame);
+}
+
+/* ============================================================
+   6. PANEL — generated from SCHEMA. Copy/paste state round-trip.
+   ============================================================ */
+const panel = document.getElementById('panel');
+const toastEl = document.getElementById('toast');
+function toast(msg) {
+  toastEl.textContent = msg;
+  toastEl.classList.add('show');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => toastEl.classList.remove('show'), 1800);
+}
+
+function onControlChange(key) {
+  if (OVERLAY_KEYS.has(key)) genOverlay(); // cheap enough to rebuild live
+  // shader keys are read every frame — nothing else to do
+}
+
+function buildSchemaPanel() {
+  const host = document.getElementById('schemaSections');
+  host.innerHTML = '';
+  for (const sec of SCHEMA) {
+    const det = document.createElement('details');
+    det.open = true;
+    const sum = document.createElement('summary');
+    sum.textContent = sec.sec;
+    const tog = document.createElement('input');
+    tog.type = 'checkbox';
+    tog.className = 'layer-toggle';
+    tog.checked = C[sec.toggle];
+    tog.addEventListener('click', e => e.stopPropagation());
+    tog.addEventListener('change', () => { C[sec.toggle] = tog.checked; onControlChange(sec.toggle); });
+    sum.appendChild(tog);
+    det.appendChild(sum);
+    for (const [key, label, min, max, step] of sec.rows) {
+      const row = document.createElement('div');
+      row.className = 'row';
+      const lab = document.createElement('label');
+      lab.textContent = label;
+      const inp = document.createElement('input');
+      inp.type = 'range'; inp.min = min; inp.max = max; inp.step = step;
+      inp.value = C[key];
+      const val = document.createElement('span');
+      val.className = 'val';
+      val.textContent = C[key];
+      inp.addEventListener('input', () => {
+        C[key] = parseFloat(inp.value);
+        val.textContent = inp.value;
+        onControlChange(key);
+      });
+      row.append(lab, inp, val);
+      det.appendChild(row);
+    }
+    host.appendChild(det);
+  }
+}
+
+function buildPaletteBody() {
+  const host = document.getElementById('paletteBody');
+  host.innerHTML = '';
+  // preset dropdown
+  const row = document.createElement('div');
+  row.className = 'row';
+  const lab = document.createElement('label');
+  lab.textContent = 'preset';
+  const sel = document.createElement('select');
+  for (const name of Object.keys(PRESETS)) {
+    const o = document.createElement('option');
+    o.value = name; o.textContent = name;
+    sel.appendChild(o);
+  }
+  if (!(PAL._preset in PRESETS)) {
+    const o = document.createElement('option');
+    o.value = 'custom'; o.textContent = 'custom'; o.disabled = true;
+    sel.appendChild(o);
+    sel.value = 'custom';
+  } else {
+    sel.value = PAL._preset;
+  }
+  sel.addEventListener('change', () => { applyPreset(sel.value); });
+  row.append(lab, sel);
+  host.appendChild(row);
+
+  const colorRow = (label, get, set) => {
+    const r = document.createElement('div');
+    r.className = 'row';
+    const l = document.createElement('label');
+    l.textContent = label;
+    const c = document.createElement('input');
+    c.type = 'color'; c.value = get();
+    c.addEventListener('input', () => { set(c.value); onControlChange('palette'); genOverlay(); });
+    r.append(l, c);
+    return r;
+  };
+  // flow stops: drag the grip onto another row to swap the two colors
+  ['deep glaze','mid glaze','light glaze','surface'].forEach((lbl, i) => {
+    const idx = 3 - i; // c3 = deep end of gradient
+    const row = colorRow(lbl, () => PAL.flow[idx], v => PAL.flow[idx] = v);
+    const grip = document.createElement('span');
+    grip.className = 'grip';
+    grip.textContent = '⠿';
+    grip.title = 'drag onto another glaze row to swap colors';
+    grip.draggable = true;
+    grip.addEventListener('dragstart', e => {
+      e.dataTransfer.setData('text/plain', String(idx));
+      e.dataTransfer.effectAllowed = 'move';
+      row.classList.add('dragging');
+    });
+    grip.addEventListener('dragend', () => row.classList.remove('dragging'));
+    row.prepend(grip);
+    row.addEventListener('dragover', e => { e.preventDefault(); row.classList.add('dragover'); });
+    row.addEventListener('dragleave', () => row.classList.remove('dragover'));
+    row.addEventListener('drop', e => {
+      e.preventDefault();
+      row.classList.remove('dragover');
+      const from = parseInt(e.dataTransfer.getData('text/plain'), 10);
+      if (isNaN(from) || from === idx) return;
+      [PAL.flow[from], PAL.flow[idx]] = [PAL.flow[idx], PAL.flow[from]];
+      PAL._preset = 'custom';
+      buildPaletteBody();
+      toast('swapped stops');
+    });
+    host.appendChild(row);
+  });
+  host.appendChild(colorRow('crystal fill', () => PAL.crystalFill, v => PAL.crystalFill = v));
+  host.appendChild(colorRow('crystal rim', () => PAL.crystalRim, v => PAL.crystalRim = v));
+  host.appendChild(colorRow('crystal glow', () => PAL.crystalGlow, v => PAL.crystalGlow = v));
+  host.appendChild(colorRow('speckle', () => PAL.speckleMain, v => PAL.speckleMain = v));
+  host.appendChild(colorRow('accent fleck', () => PAL.speckleAccent, v => PAL.speckleAccent = v));
+}
+
+function applyPreset(name) {
+  PAL = JSON.parse(JSON.stringify(PRESETS[name]));
+  PAL._preset = name;
+  buildPaletteBody();
+  genOverlay();
+}
+
+function setSeed(s) {
+  seed = ((s % 1000000) + 1000000) % 1000000;
+  document.getElementById('seedval').textContent = seed;
+  document.getElementById('hudseed').textContent = seed;
+  genOverlay();
+}
+
+function serializeState() {
+  const pal = { ...PAL };
+  delete pal._preset;
+  return JSON.stringify({
+    _format: 'glaze-playground/v1 (colors hex, radii/spread in CSS px)',
+    seed,
+    preset: PAL._preset,
+    palette: pal,
+    controls: { ...C },
+  }, null, 2);
+}
+
+function applyState(obj) {
+  if (obj.seed != null) seed = obj.seed;
+  if (obj.controls) Object.assign(C, obj.controls);
+  if (obj.palette) {
+    PAL = JSON.parse(JSON.stringify(obj.palette));
+    PAL._preset = obj.preset || 'custom';
+  }
+  buildSchemaPanel();
+  buildPaletteBody();
+  setSeed(seed);
+  toast('state applied');
+}
+
+// wire buttons
+document.getElementById('reroll').onclick = () => setSeed(Math.floor(Math.random() * 1000000));
+document.getElementById('prevSeed').onclick = () => setSeed(seed - 1);
+document.getElementById('nextSeed').onclick = () => setSeed(seed + 1);
+document.getElementById('goSeed').onclick = () => {
+  const v = parseInt(document.getElementById('seedInput').value, 10);
+  if (!isNaN(v)) setSeed(v);
+};
+document.getElementById('copyState').onclick = () => {
+  const s = serializeState();
+  console.log('GLAZE STATE ↓\n' + s);
+  navigator.clipboard.writeText(s).then(
+    () => toast('state copied — paste it back to bake in'),
+    () => toast('clipboard blocked — state is in the console')
+  );
+};
+document.getElementById('pasteState').onclick = async () => {
+  let txt = '';
+  try { txt = await navigator.clipboard.readText(); } catch (e) {}
+  if (!txt) txt = prompt('Paste glaze state JSON:') || '';
+  try { applyState(JSON.parse(txt)); }
+  catch (e) { toast('could not parse that state'); }
+};
+document.getElementById('resetAll').onclick = () => {
+  Object.assign(C, JSON.parse(JSON.stringify(C_DEFAULTS)));
+  applyPreset(DEFAULT_PRESET);
+  buildSchemaPanel();
+  setSeed(DEFAULT_SEED);
+  toast('reset to defaults');
+};
+document.getElementById('savePng').onclick = () => {
+  // composite both layers at render resolution
+  const out = document.createElement('canvas');
+  out.width = glCanvas.width; out.height = glCanvas.height;
+  const ctx = out.getContext('2d');
+  ctx.drawImage(glCanvas, 0, 0);
+  ctx.drawImage(ovCanvas, 0, 0, out.width, out.height);
+  const a = document.createElement('a');
+  a.download = `glaze-${PAL._preset.replace(/\s+/g, '-').toLowerCase()}-seed${seed}.png`;
+  a.href = out.toDataURL('image/png');
+  a.click();
+  toast('saved png');
+};
+
+addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  if (e.key === 'h' || e.key === 'H') panel.classList.toggle('hidden');
+  if (e.key === 'r' || e.key === 'R') setSeed(Math.floor(Math.random() * 1000000));
+  if (e.key === 's' || e.key === 'S') document.getElementById('savePng').click();
+});
+
+/* ============================================================
+   7. INIT
+   ============================================================ */
+PAL = JSON.parse(JSON.stringify(PRESETS[DEFAULT_PRESET]));
+PAL._preset = DEFAULT_PRESET;
+buildSchemaPanel();
+buildPaletteBody();
+resize();
+setSeed(DEFAULT_SEED);
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
