@@ -2,6 +2,8 @@
 
 Generative simulations of pottery glazes — layered noise and metaball systems standing in for molten base, drips, crystal blooms, and mineral speckle. Two standalone HTML files, no build step, no dependencies.
 
+<img width="1432" height="807" alt="Screenshot 2026-07-04 at 1 50 27 PM" src="https://github.com/user-attachments/assets/92550b55-0988-4620-b7e5-b17b5e0af691" />
+
 ## Files
 
 **`index.html`** — full interactive generator with a live tuning panel.
