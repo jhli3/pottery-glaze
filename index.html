@@ -40,7 +40,7 @@
 
   #panel {
     position: fixed; top: 12px; right: 12px; z-index: 4;
-    width: 272px; max-height: calc(100vh - 24px); overflow-y: auto;
+    width: 300px; max-height: calc(100vh - 24px); overflow-y: auto; overflow-x: hidden;
     background: var(--panel-bg); color: var(--panel-fg);
     border: 1px solid var(--panel-line); border-radius: 10px;
     backdrop-filter: blur(12px);
@@ -72,7 +72,7 @@
   .row .grip { flex: 0 0 14px; cursor: grab; color: var(--panel-dim); user-select: none; font-size: 11px; }
   .row.dragover { outline: 1px dashed var(--accent); outline-offset: 2px; border-radius: 4px; }
   .row.dragging { opacity: 0.4; }
-  .row select { flex: 1; background: #1c2422; color: var(--panel-fg); border: 1px solid var(--panel-line); border-radius: 4px; padding: 3px 4px; font: inherit; }
+  .row select { flex: 1; min-width: 0; background: #1c2422; color: var(--panel-fg); border: 1px solid var(--panel-line); border-radius: 4px; padding: 3px 4px; font: inherit; text-overflow: ellipsis; }
   .btnrow { display: flex; gap: 6px; margin: 8px 0 2px; flex-wrap: wrap; }
   button {
     background: #1c2422; color: var(--panel-fg); border: 1px solid var(--panel-line);
@@ -199,7 +199,7 @@ const PRESETS = {
     crystalFill: '#79c8c0', crystalRim: '#3f8a84', crystalGlow: '#d8efe4',
     speckleMain: '#58b8b0', speckleAccent: '#c96f3a',
   },
-  'SW253 over SW251': { // chartreuse over chocolate clay, periwinkle mottle, pink flecks
+  'Green Opal Chocolate': { // chartreuse over chocolate clay, periwinkle mottle, pink flecks
     flow: ['#dcefcc', '#a4d16e', '#8187b3', '#392b23'],
     crystalFill: '#b9c4e0', crystalRim: '#6d74a3', crystalGlow: '#e8f4dc',
     speckleMain: '#5a5f8c', speckleAccent: '#d489a0',
@@ -209,7 +209,7 @@ const PRESETS = {
     crystalFill: '#96a0ee', crystalRim: '#5c66c2', crystalGlow: '#e6e8fa',
     speckleMain: '#7d8a5a', speckleAccent: '#cdd97a',
   },
-  'Snow, Seaweed & Rainforest': { // milky snow → mossy green → sea teal → indigo pools, navy dot clusters
+  'Seaweed & Rainforest': { // milky snow → mossy green → sea teal → indigo pools, navy dot clusters
     flow: ['#eef0e6', '#7d9a6f', '#4f7f96', '#1c2f52'],
     crystalFill: '#c2d4dc', crystalRim: '#42627f', crystalGlow: '#f2f5ec',
     speckleMain: '#1e3a5f', speckleAccent: '#8a8f4a',

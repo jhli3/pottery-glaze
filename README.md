@@ -27,7 +27,7 @@ python3 -m http.server
 
 ## Palette system
 
-Presets live in the `PRESETS` object in `glaze-playground.html` — each is 9 hex values (a 4-stop flow gradient, crystal fill/rim/glow, speckle main/accent) named after real glaze combinations (e.g. `SW253 over SW251`, `Celadon Bloom`). Adding a preset is just adding an entry to that object.
+Presets live in the `PRESETS` object in `glaze-playground.html` — each is 9 hex values (a 4-stop flow gradient, crystal fill/rim/glow, speckle main/accent) named after real glaze combinations (e.g. `Eggplant + Sea Spray`, `Celadon Bloom`). Adding a preset is just adding an entry to that object.
 
 ## Notes carried from the creative coding library
 
