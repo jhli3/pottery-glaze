@@ -4,7 +4,7 @@ Generative simulations of pottery glazes — layered noise and metaball systems 
 
 ## Files
 
-**`glaze-playground.html`** — full interactive generator with a live tuning panel.
+**`index.html`** — full interactive generator with a live tuning panel.
 - WebGL layer: cosine multi-stop gradient, simplex UV warp (flow), vertical streak advection (drips), ridged-noise relief, color-shift grain.
 - Canvas2D overlay: crystalline blooms + speckle bursts, deterministic from the same seed.
 - All state lives in two data blocks, `C` (scalar controls) and `PAL` (palette). The control panel is generated from a `SCHEMA` array, not hand-built — add a row to `SCHEMA` and a slider appears.
