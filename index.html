@@ -49,7 +49,17 @@
     scrollbar-width: thin;
   }
   #panel.hidden { display: none; }
-  #panel h1 { font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); margin: 2px 0 8px; }
+  #panel-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 2px 0 8px; }
+  #panel h1 { font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); margin: 0; }
+  #panelMinBtn {
+    flex: 0 0 auto; background: none; border: 1px solid var(--panel-line); border-radius: 5px;
+    color: var(--panel-dim); cursor: pointer; font: 12px/1 ui-monospace, Menlo, monospace;
+    padding: 2px 7px;
+  }
+  #panelMinBtn:hover { border-color: var(--accent); color: var(--accent); }
+  #panel.minimized { width: auto; max-height: none; padding: 8px 10px; }
+  #panel.minimized > *:not(#panel-header) { display: none; }
+  #panel.minimized #panel-header { margin: 0; }
   #panel details { border-top: 1px solid var(--panel-line); padding: 6px 0; }
   #panel summary { cursor: pointer; color: var(--panel-dim); text-transform: uppercase; font-size: 10px; letter-spacing: 0.1em; user-select: none; display: flex; align-items: center; gap: 8px; }
   #panel summary::marker { color: var(--panel-dim); }
@@ -90,7 +100,10 @@
 <div id="hud"><b>glaze playground</b> · seed <span id="hudseed"></span> · <b>R</b> reroll · <b>H</b> panel · <b>S</b> save png</div>
 
 <div id="panel">
-  <h1>Glaze Playground</h1>
+  <div id="panel-header">
+    <h1>Glaze Playground</h1>
+    <button id="panelMinBtn" title="Minimize panel">−</button>
+  </div>
   <details open id="sec-seed">
     <summary>Kiln (seed)</summary>
     <div class="row"><label>seed</label><span class="val" id="seedval" style="flex:1;text-align:left"></span></div>
@@ -834,6 +847,12 @@ function frame(now) {
    6. PANEL — generated from SCHEMA. Copy/paste state round-trip.
    ============================================================ */
 const panel = document.getElementById('panel');
+const panelMinBtn = document.getElementById('panelMinBtn');
+panelMinBtn.addEventListener('click', () => {
+  const min = panel.classList.toggle('minimized');
+  panelMinBtn.textContent = min ? '+' : '−';
+  panelMinBtn.title = min ? 'Restore panel' : 'Minimize panel';
+});
 const toastEl = document.getElementById('toast');
 function toast(msg) {
   toastEl.textContent = msg;
