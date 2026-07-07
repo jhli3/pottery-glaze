@@ -25,27 +25,23 @@
     --accent: #8fd0be;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { width: 100%; height: 100%; overflow: hidden; background: #101413; }
-  canvas.layer { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #101413; --panel-w: 320px; }
+  canvas.layer {
+    position: fixed; top: 0; left: 0; display: block;
+    width: calc(100vw - var(--panel-w)); height: 100vh;
+  }
   #gl { z-index: 0; }
   #overlay { z-index: 1; pointer-events: none; }
 
-  #hud {
-    position: fixed; left: 18px; bottom: 14px; z-index: 3;
-    font: 11px/1.5 ui-monospace, "SF Mono", Menlo, monospace;
-    color: rgba(255,255,255,0.55); text-shadow: 0 1px 3px rgba(0,0,0,0.4);
-    pointer-events: none; user-select: none;
-  }
-  #hud b { color: rgba(255,255,255,0.85); font-weight: 600; }
 
   #panel {
-    position: fixed; top: 12px; right: 12px; z-index: 4;
-    width: 300px; max-height: calc(100vh - 24px); overflow-y: auto; overflow-x: hidden;
+    position: fixed; top: 0; right: 0; bottom: 0; z-index: 4;
+    width: 320px; overflow-y: auto; overflow-x: hidden;
     background: var(--panel-bg); color: var(--panel-fg);
-    border: 1px solid var(--panel-line); border-radius: 10px;
+    border-left: 1px solid var(--panel-line);
     backdrop-filter: blur(12px);
     font: 12px/1.4 ui-monospace, "SF Mono", Menlo, monospace;
-    padding: 10px 12px 14px;
+    padding: 14px 14px 18px;
     scrollbar-width: thin;
   }
   #panel.hidden { display: none; }
@@ -57,9 +53,19 @@
     padding: 2px 7px;
   }
   #panelMinBtn:hover { border-color: var(--accent); color: var(--accent); }
-  #panel.minimized { width: auto; max-height: none; padding: 8px 10px; }
+  /* Minimized: collapse the whole dock to a small floating button in the corner. */
+  #panel.minimized {
+    top: 12px; right: 12px; bottom: auto; width: auto;
+    padding: 0; background: none; border: none; backdrop-filter: none; overflow: visible;
+  }
   #panel.minimized > *:not(#panel-header) { display: none; }
   #panel.minimized #panel-header { margin: 0; }
+  #panel.minimized h1 { display: none; }
+  #panel.minimized #panelMinBtn {
+    background: var(--panel-bg); backdrop-filter: blur(12px);
+    border-radius: 7px; padding: 6px 9px; opacity: 0.6; transition: opacity 0.15s;
+  }
+  #panel.minimized #panelMinBtn:hover { opacity: 1; }
   #panel details { border-top: 1px solid var(--panel-line); padding: 6px 0; }
   #panel summary { cursor: pointer; color: var(--panel-dim); text-transform: uppercase; font-size: 10px; letter-spacing: 0.1em; user-select: none; display: flex; align-items: center; gap: 8px; }
   #panel summary::marker { color: var(--panel-dim); }
@@ -97,7 +103,6 @@
 <canvas id="gl" class="layer"></canvas>
 <canvas id="overlay" class="layer"></canvas>
 
-<div id="hud"><b>glaze playground</b> · seed <span id="hudseed"></span> · <b>R</b> reroll · <b>H</b> panel · <b>S</b> save png</div>
 
 <div id="panel">
   <div id="panel-header">
@@ -502,10 +507,15 @@ const U = {};
    ============================================================ */
 const ovCanvas = document.getElementById('overlay');
 const ov = ovCanvas.getContext('2d');
+
+// CSS-pixel size of the visible canvas region (shrinks when the panel is docked open)
+const viewW = () => glCanvas.clientWidth;
+const viewH = () => glCanvas.clientHeight;
 let crystals = [];   // {x, y, r, delay, spokes:[{a, len, w, al}]}
 let speckles = [];   // {x, y, lobes:[{dx,dy,r}], rot, squash, accent, al, bleed}
 let overlayBornAt = 0;
 let overlayAnimating = false;
+const CRYSTAL_GROW_DELAY = 0.35;  // seconds to hold empty before crystals start growing in
 
 // offscreen buffers: coarse metaball field (upscaled smooth) + prerendered speckle
 const fieldCv = document.createElement('canvas');
@@ -516,7 +526,7 @@ const speckleCv = document.createElement('canvas');
 const speckleCtx = speckleCv.getContext('2d');
 
 function genOverlay() {
-  const w = innerWidth, h = innerHeight;
+  const w = viewW(), h = viewH();
   const rng = mulberry32(seed * 7 + 13);
   crystals = [];
   speckles = [];
@@ -600,11 +610,11 @@ function genOverlay() {
 // prerendered once per generation — soft radial lobes read as smudged ink
 function renderSpeckleLayer() {
   const dpr = Math.min(devicePixelRatio || 1, 1.5);
-  speckleCv.width = Math.round(innerWidth * dpr);
-  speckleCv.height = Math.round(innerHeight * dpr);
+  speckleCv.width = Math.round(viewW() * dpr);
+  speckleCv.height = Math.round(viewH() * dpr);
   const sx = speckleCtx;
   sx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  sx.clearRect(0, 0, innerWidth, innerHeight);
+  sx.clearRect(0, 0, viewW(), viewH());
   const soft = 0.25 + C.speckleSmudge * 1.3;
   for (const f of speckles) {
     const col = f.accent ? PAL.speckleAccent : PAL.speckleMain;
@@ -635,7 +645,7 @@ function renderSpeckleLayer() {
 
 function drawOverlay(globalGrowth) {
   const dpr = Math.min(devicePixelRatio || 1, 1.5);
-  const w = innerWidth, h = innerHeight;
+  const w = viewW(), h = viewH();
   ov.setTransform(dpr, 0, 0, dpr, 0, 0);
   ov.clearRect(0, 0, w, h);
 
@@ -784,8 +794,8 @@ let frameCount = 0;
 function resize() {
   const dpr = Math.min(devicePixelRatio || 1, 1.5);
   for (const cv of [glCanvas, ovCanvas]) {
-    cv.width = Math.round(innerWidth * dpr);
-    cv.height = Math.round(innerHeight * dpr);
+    cv.width = Math.round(viewW() * dpr);
+    cv.height = Math.round(viewH() * dpr);
   }
   gl.viewport(0, 0, glCanvas.width, glCanvas.height);
   genOverlay(); // geometry is in CSS pixels; regenerate for new bounds
@@ -833,9 +843,9 @@ function frame(now) {
   // crystal grow-in animation, then continuous drift (half framerate — the
   // field recompute is the hot path and 30fps is plenty for slow wander)
   if (overlayAnimating) {
-    const el = (performance.now() - overlayBornAt) / (C.crystalGrowth * 1000);
+    const el = (performance.now() - overlayBornAt - CRYSTAL_GROW_DELAY * 1000) / (C.crystalGrowth * 1000);
     if (el >= 1) { overlayAnimating = false; drawOverlay(1); }
-    else drawOverlay(el);
+    else drawOverlay(Math.max(0, el));
   } else if (C.crystalsOn && C.crystalDrift > 0.001 && C.driftSpeed > 0.001 && (frameCount & 1) === 0) {
     drawOverlay(1);
   }
@@ -848,10 +858,22 @@ function frame(now) {
    ============================================================ */
 const panel = document.getElementById('panel');
 const panelMinBtn = document.getElementById('panelMinBtn');
+
+// Reserve canvas space for the docked panel so the glaze is never covered.
+// Reads the panel's real width (0 when hidden), then resizes the canvases to fit.
+function syncLayout() {
+  // Hidden or minimized → reserve nothing; the canvas goes full-width and the
+  // minimized button just floats over the art.
+  const docked = !panel.classList.contains('hidden') && !panel.classList.contains('minimized');
+  document.body.style.setProperty('--panel-w', docked ? panel.offsetWidth + 'px' : '0px');
+  resize();
+}
+
 panelMinBtn.addEventListener('click', () => {
   const min = panel.classList.toggle('minimized');
   panelMinBtn.textContent = min ? '+' : '−';
   panelMinBtn.title = min ? 'Restore panel' : 'Minimize panel';
+  syncLayout();
 });
 const toastEl = document.getElementById('toast');
 function toast(msg) {
@@ -989,7 +1011,6 @@ function applyPreset(name) {
 function setSeed(s) {
   seed = ((s % 1000000) + 1000000) % 1000000;
   document.getElementById('seedval').textContent = seed;
-  document.getElementById('hudseed').textContent = seed;
   genOverlay();
 }
 
@@ -1064,9 +1085,14 @@ document.getElementById('savePng').onclick = () => {
 
 addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
-  if (e.key === 'h' || e.key === 'H') panel.classList.toggle('hidden');
+  if (e.key === 'h' || e.key === 'H') { panel.classList.toggle('hidden'); syncLayout(); }
   if (e.key === 'r' || e.key === 'R') setSeed(Math.floor(Math.random() * 1000000));
   if (e.key === 's' || e.key === 'S') document.getElementById('savePng').click();
+  if (e.key === ' ') {                       // replay animation, keep panel customizations
+    e.preventDefault();
+    time = morphTime = grainTime = ovTime = 0;
+    genOverlay();                            // replay crystal bloom growth from t=0
+  }
 });
 
 /* ============================================================
@@ -1076,7 +1102,7 @@ PAL = JSON.parse(JSON.stringify(PRESETS[DEFAULT_PRESET]));
 PAL._preset = DEFAULT_PRESET;
 buildSchemaPanel();
 buildPaletteBody();
-resize();
+syncLayout();   // sizes the canvases to the space beside the docked panel
 setSeed(DEFAULT_SEED);
 requestAnimationFrame(frame);
 </script>

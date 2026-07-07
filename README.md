@@ -4,7 +4,7 @@ Generative simulations of pottery glazes — layered noise and metaball systems 
 
 **[Live demo →](https://jhli3.github.io/pottery-glaze/)**
 
-<img width="1432" height="807" alt="Screenshot 2026-07-04 at 1 50 27 PM" src="https://github.com/user-attachments/assets/92550b55-0988-4620-b7e5-b17b5e0af691" />
+<img alt="Glaze playground — Seaweed &amp; Rainforest preset with the docked control panel" src="screenshot.png" />
 
 ## Files
 
@@ -28,7 +28,7 @@ python3 -m http.server
 
 ## Controls
 
-**Playground:** `R` reroll seed · `H` toggle panel · `S` save PNG
+**Playground:** `R` reroll seed · `Space` replay animation (keeps customizations) · `H` toggle panel · `S` save PNG
 **Tiles:** click a tile to re-fire it · `R` re-fire the whole board · `S` save board as PNG
 
 ## Palette system

@@ -2,7 +2,10 @@
   "permissions": {
     "allow": [
       "Bash(git checkout *)",
-      "Bash(git switch *)"
+      "Bash(git switch *)",
+      "Bash(pkill -f \"http.server 8731\")",
+      "Read(//var/folders/xc/v2285c993v9gdqplc138scdh0000gn/T/TemporaryItems/NSIRD_screencaptureui_eKe5CF/**)",
+      "Bash(cp '/var/folders/xc/v2285c993v9gdqplc138scdh0000gn/T/TemporaryItems/NSIRD_screencaptureui_eKe5CF/Screenshot 2026-07-07 at 11.48.06 AM.png' /Users/white/Code/pottery-glaze/screenshot.png)"
     ]
   }
 }
