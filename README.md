@@ -4,7 +4,7 @@ Generative simulations of pottery glazes — layered noise and metaball systems 
 
 **[Live demo →](https://jhli3.github.io/pottery-glaze/)**
 
-<img alt="Glaze playground — Seaweed &amp; Rainforest preset with the docked control panel" src="screenshot.png" />
+<img alt="Glaze playground — Seaweed &amp; Rainforest preset with the docked control panel" src="screenshot.jpg" />
 
 ## Files
 
