@@ -2,6 +2,8 @@
 
 Generative simulations of pottery glazes — layered noise and metaball systems standing in for molten base, drips, crystal blooms, and mineral speckle. Two standalone HTML files, no build step, no dependencies.
 
+**[Live demo →](https://jhli3.github.io/pottery-glaze/)**
+
 <img width="1432" height="807" alt="Screenshot 2026-07-04 at 1 50 27 PM" src="https://github.com/user-attachments/assets/92550b55-0988-4620-b7e5-b17b5e0af691" />
 
 ## Files
@@ -16,7 +18,9 @@ Generative simulations of pottery glazes — layered noise and metaball systems 
 
 ## Running it
 
-No server needed — open either file directly in a browser, or serve the folder locally:
+The playground is hosted on GitHub Pages: **https://jhli3.github.io/pottery-glaze/**
+
+To run locally, no server is needed — open either file directly in a browser, or serve the folder locally:
 
 ```
 python3 -m http.server
@@ -29,7 +33,7 @@ python3 -m http.server
 
 ## Palette system
 
-Presets live in the `PRESETS` object in `glaze-playground.html` — each is 9 hex values (a 4-stop flow gradient, crystal fill/rim/glow, speckle main/accent) named after real glaze combinations (e.g. `Eggplant + Sea Spray`, `Celadon Bloom`). Adding a preset is just adding an entry to that object.
+Presets live in the `PRESETS` object in `index.html` — each is 9 hex values (a 4-stop flow gradient, crystal fill/rim/glow, speckle main/accent) named after real glaze combinations (e.g. `Eggplant + Sea Spray`, `Celadon Bloom`). Adding a preset is just adding an entry to that object.
 
 ## Notes carried from the creative coding library
 
